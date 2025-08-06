@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  database-service:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - PGBOUNCER_HOST=${PGBOUNCER_HOST:-db01.int.stortz.tech}
+      - PGBOUNCER_PORT=${PGBOUNCER_PORT:-6432}
+      - DATABASE_NAME=${DATABASE_NAME:-postgres}
+      - DATABASE_USER=${DATABASE_USER:-postgres}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-postgres}
+      - MIN_CONNECTIONS=${MIN_CONNECTIONS:-1}
+      - MAX_CONNECTIONS=${MAX_CONNECTIONS:-10}
+      - DEBUG=${DEBUG:-true}
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - database-network
+
+  # Optional: Add a simple database for testing if needed
+  # postgres-test:
+  #   image: postgres:14
+  #   environment:
+  #     POSTGRES_DB: postgres
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: postgres
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   networks:
+  #     - database-network
+
+networks:
+  database-network:
+    driver: bridge
+
+# volumes:
+#   postgres_data: 

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.core.database import get_db_connection, test_connection
 from app.core.config import settings
+from app.core.sql_security import sql_security
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +34,19 @@ class RecordsResponse(BaseModel):
     records: List[RecordResponse]
     count: int
     total_count: int
+
+class RawSQLRequest(BaseModel):
+    """Model for raw SQL requests"""
+    sql: str
+    parameters: Optional[Dict[str, Any]] = None
+
+class RawSQLResponse(BaseModel):
+    """Model for raw SQL responses"""
+    success: bool
+    message: str
+    data: Optional[List[Dict[str, Any]]] = None
+    row_count: Optional[int] = None
+    affected_rows: Optional[int] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -294,6 +308,78 @@ async def get_tables_by_schema(schema_name: str):
         logger.error(f"Failed to get tables for schema {schema_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get tables for schema {schema_name}: {str(e)}")
 
+# Raw SQL Endpoints (must come before generic CRUD endpoints to avoid path conflicts)
+@crud_router.post("/raw-sql")
+async def execute_raw_sql(request: RawSQLRequest):
+    """Execute a raw SQL query with optional parameters."""
+    try:
+        # Validate SQL using sql_security
+        sql_security.validate_sql_statement(request.sql, "read")
+        logger.info(f"Executing raw SQL: {request.sql}")
+
+        async with get_db_connection() as conn:
+            if request.parameters:
+                # Use parameterized query if parameters are provided
+                rows = await conn.fetch(request.sql, *request.parameters.values())
+            else:
+                # Execute raw SQL
+                rows = await conn.fetch(request.sql)
+            
+            # Convert rows to list of dicts
+            data = [dict(row) for row in rows]
+            
+            return RawSQLResponse(
+                success=True,
+                message=f"Raw SQL query executed successfully. Rows returned: {len(data)}",
+                data=data,
+                row_count=len(data)
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to execute raw SQL: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to execute raw SQL: {str(e)}")
+
+@crud_router.post("/raw-sql/write")
+async def execute_raw_write_sql(request: RawSQLRequest):
+    """Execute a raw SQL write query (INSERT, UPDATE, DELETE) with optional parameters."""
+    try:
+        # Validate SQL using sql_security for write operations
+        sql_security.validate_sql_statement(request.sql, "write")
+        logger.info(f"Executing raw write SQL: {request.sql}")
+
+        async with get_db_connection() as conn:
+            if request.parameters:
+                # Use parameterized query if parameters are provided
+                result = await conn.execute(request.sql, *request.parameters.values())
+            else:
+                # Execute raw SQL
+                result = await conn.execute(request.sql)
+            
+            # Parse the result to extract the number of affected rows
+            affected_rows = 0
+            if result:
+                try:
+                    # Result format is like "UPDATE 1" or "INSERT 0 1"
+                    parts = result.split()
+                    if len(parts) >= 2:
+                        affected_rows = int(parts[-1])  # Last part is usually the count
+                    else:
+                        affected_rows = int(result)
+                except (ValueError, IndexError):
+                    affected_rows = 0
+            
+            return RawSQLResponse(
+                success=True,
+                message=f"Raw SQL write query executed successfully. Affected rows: {affected_rows}",
+                affected_rows=affected_rows
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to execute raw write SQL: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to execute raw write SQL: {str(e)}")
+
 # CRUD Operations
 @crud_router.get("/{schema_name}/{table_name}")
 async def read_records(
@@ -305,6 +391,10 @@ async def read_records(
 ):
     """Read records from a table - Retrieve records with pagination and optional ordering"""
     try:
+        # Validate schema and table names
+        schema_name = sql_security.validate_schema_name(schema_name)
+        table_name = sql_security.validate_table_name(table_name)
+        
         async with get_db_connection() as conn:
             # Validate table exists
             table_exists = await conn.fetchval(
@@ -354,6 +444,10 @@ async def read_records(
 async def read_record(schema_name: str, table_name: str, record_id: str):
     """Read a single record by ID - Retrieve a specific record from a table"""
     try:
+        # Validate schema and table names
+        schema_name = sql_security.validate_schema_name(schema_name)
+        table_name = sql_security.validate_table_name(table_name)
+        
         async with get_db_connection() as conn:
             # Validate table exists
             table_exists = await conn.fetchval(
@@ -393,6 +487,10 @@ async def read_record(schema_name: str, table_name: str, record_id: str):
 async def create_record(schema_name: str, table_name: str, record: RecordCreate):
     """Create a new record - Insert a new record into a table"""
     try:
+        # Validate schema and table names
+        schema_name = sql_security.validate_schema_name(schema_name)
+        table_name = sql_security.validate_table_name(table_name)
+        
         async with get_db_connection() as conn:
             # Validate table exists
             table_exists = await conn.fetchval(
@@ -436,6 +534,10 @@ async def create_record(schema_name: str, table_name: str, record: RecordCreate)
 async def update_record(schema_name: str, table_name: str, record_id: str, record: RecordUpdate):
     """Update an existing record - Modify a record in a table"""
     try:
+        # Validate schema and table names
+        schema_name = sql_security.validate_schema_name(schema_name)
+        table_name = sql_security.validate_table_name(table_name)
+        
         async with get_db_connection() as conn:
             # Validate table exists
             table_exists = await conn.fetchval(
@@ -501,6 +603,10 @@ async def update_record(schema_name: str, table_name: str, record_id: str, recor
 async def delete_record(schema_name: str, table_name: str, record_id: str):
     """Delete a record - Remove a record from a table"""
     try:
+        # Validate schema and table names
+        schema_name = sql_security.validate_schema_name(schema_name)
+        table_name = sql_security.validate_table_name(table_name)
+        
         async with get_db_connection() as conn:
             # Validate table exists
             table_exists = await conn.fetchval(
@@ -549,6 +655,94 @@ async def delete_record(schema_name: str, table_name: str, record_id: str):
     except Exception as e:
         logger.error(f"Failed to delete record {record_id} from {schema_name}.{table_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete record: {str(e)}")
+
+@crud_router.patch("/{schema_name}/{table_name}/{record_id}")
+async def upsert_record(schema_name: str, table_name: str, record_id: str, record: RecordUpdate):
+    """Upsert a record - Insert if not exists, update if exists"""
+    try:
+        # Validate schema and table names
+        schema_name = sql_security.validate_schema_name(schema_name)
+        table_name = sql_security.validate_table_name(table_name)
+        
+        async with get_db_connection() as conn:
+            # Validate table exists
+            table_exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)",
+                schema_name, table_name
+            )
+            if not table_exists:
+                raise HTTPException(status_code=404, detail=f"Table {schema_name}.{table_name} not found")
+            
+            # Try to convert record_id to integer if possible, otherwise use as string
+            try:
+                record_id_int = int(record_id)
+                exists_query = f"SELECT EXISTS(SELECT 1 FROM {schema_name}.{table_name} WHERE id = $1)"
+                exists = await conn.fetchval(exists_query, record_id_int)
+            except ValueError:
+                # If not an integer, use as string
+                exists_query = f"SELECT EXISTS(SELECT 1 FROM {schema_name}.{table_name} WHERE id = $1)"
+                exists = await conn.fetchval(exists_query, record_id)
+            
+            # Build dynamic query based on whether record exists
+            columns = list(record.data.keys())
+            values = list(record.data.values())
+            
+            if exists:
+                # Update existing record
+                set_clause = ", ".join([f"{col} = ${i+2}" for i, col in enumerate(columns)])
+                
+                if isinstance(record_id_int, int):
+                    query = f"""
+                        UPDATE {schema_name}.{table_name}
+                        SET {set_clause}
+                        WHERE id = $1
+                        RETURNING *
+                    """
+                    row = await conn.fetchrow(query, record_id_int, *values)
+                else:
+                    query = f"""
+                        UPDATE {schema_name}.{table_name}
+                        SET {set_clause}
+                        WHERE id = $1
+                        RETURNING *
+                    """
+                    row = await conn.fetchrow(query, record_id, *values)
+                
+                operation = "updated"
+            else:
+                # Insert new record with the specified ID
+                columns.append('id')  # Add ID to columns
+                placeholders = [f"${i+1}" for i in range(len(columns))]
+                values.append(record_id_int if isinstance(record_id_int, int) else record_id)
+                
+                query = f"""
+                    INSERT INTO {schema_name}.{table_name} ({', '.join(columns)})
+                    VALUES ({', '.join(placeholders)})
+                    RETURNING *
+                """
+                
+                row = await conn.fetchrow(query, *values)
+                operation = "created"
+            
+            if not row:
+                raise HTTPException(status_code=500, detail=f"Failed to {operation} record")
+            
+            record_data = dict(row)
+            return {
+                "message": f"Record {operation} successfully",
+                "operation": operation,
+                "record": RecordResponse(
+                    id=record_data.get('id'),
+                    data=record_data,
+                    created_at=record_data.get('created_at'),
+                    updated_at=record_data.get('updated_at')
+                )
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upsert record {record_id} in {schema_name}.{table_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upsert record: {str(e)}")
 
 # Include the routers
 app.include_router(admin_router)

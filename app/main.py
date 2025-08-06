@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 import logging
 import asyncpg
 from typing import Optional, List, Dict, Any
+from pydantic import BaseModel
 
 from app.core.database import get_db_connection, test_connection
 from app.core.config import settings
@@ -10,6 +11,28 @@ from app.core.config import settings
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Pydantic models for CRUD operations
+class RecordCreate(BaseModel):
+    """Model for creating a new record"""
+    data: Dict[str, Any]
+
+class RecordUpdate(BaseModel):
+    """Model for updating an existing record"""
+    data: Dict[str, Any]
+
+class RecordResponse(BaseModel):
+    """Model for record response"""
+    id: Optional[Any] = None
+    data: Dict[str, Any]
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+class RecordsResponse(BaseModel):
+    """Model for multiple records response"""
+    records: List[RecordResponse]
+    count: int
+    total_count: int
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -38,6 +61,9 @@ app = FastAPI(
 
 # Create router for admin endpoints
 admin_router = APIRouter(prefix="/admin", tags=["Admin"])
+
+# Create router for CRUD endpoints
+crud_router = APIRouter(prefix="/crud", tags=["CRUD Operations"])
 
 @app.get("/")
 async def root():
@@ -268,5 +294,262 @@ async def get_tables_by_schema(schema_name: str):
         logger.error(f"Failed to get tables for schema {schema_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get tables for schema {schema_name}: {str(e)}")
 
-# Include the admin router
-app.include_router(admin_router) 
+# CRUD Operations
+@crud_router.get("/{schema_name}/{table_name}")
+async def read_records(
+    schema_name: str, 
+    table_name: str, 
+    limit: int = 100, 
+    offset: int = 0,
+    order_by: Optional[str] = None
+):
+    """Read records from a table - Retrieve records with pagination and optional ordering"""
+    try:
+        async with get_db_connection() as conn:
+            # Validate table exists
+            table_exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)",
+                schema_name, table_name
+            )
+            if not table_exists:
+                raise HTTPException(status_code=404, detail=f"Table {schema_name}.{table_name} not found")
+            
+            # Build query with optional ordering
+            order_clause = f"ORDER BY {order_by}" if order_by else ""
+            query = f"""
+                SELECT * FROM {schema_name}.{table_name}
+                {order_clause}
+                LIMIT $1 OFFSET $2
+            """
+            
+            # Get total count
+            count_query = f"SELECT COUNT(*) FROM {schema_name}.{table_name}"
+            total_count = await conn.fetchval(count_query)
+            
+            # Get records
+            rows = await conn.fetch(query, limit, offset)
+            
+            records = []
+            for row in rows:
+                record_data = dict(row)
+                records.append(RecordResponse(
+                    id=record_data.get('id'),  # Assuming 'id' is the primary key
+                    data=record_data,
+                    created_at=record_data.get('created_at'),
+                    updated_at=record_data.get('updated_at')
+                ))
+            
+            return RecordsResponse(
+                records=records,
+                count=len(records),
+                total_count=total_count
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to read records from {schema_name}.{table_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to read records: {str(e)}")
+
+@crud_router.get("/{schema_name}/{table_name}/{record_id}")
+async def read_record(schema_name: str, table_name: str, record_id: str):
+    """Read a single record by ID - Retrieve a specific record from a table"""
+    try:
+        async with get_db_connection() as conn:
+            # Validate table exists
+            table_exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)",
+                schema_name, table_name
+            )
+            if not table_exists:
+                raise HTTPException(status_code=404, detail=f"Table {schema_name}.{table_name} not found")
+            
+            # Try to convert record_id to integer if possible, otherwise use as string
+            try:
+                record_id_int = int(record_id)
+                query = f"SELECT * FROM {schema_name}.{table_name} WHERE id = $1"
+                row = await conn.fetchrow(query, record_id_int)
+            except ValueError:
+                # If not an integer, use as string
+                query = f"SELECT * FROM {schema_name}.{table_name} WHERE id = $1"
+                row = await conn.fetchrow(query, record_id)
+            
+            if not row:
+                raise HTTPException(status_code=404, detail=f"Record with ID {record_id} not found")
+            
+            record_data = dict(row)
+            return RecordResponse(
+                id=record_data.get('id'),
+                data=record_data,
+                created_at=record_data.get('created_at'),
+                updated_at=record_data.get('updated_at')
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to read record {record_id} from {schema_name}.{table_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to read record: {str(e)}")
+
+@crud_router.post("/{schema_name}/{table_name}")
+async def create_record(schema_name: str, table_name: str, record: RecordCreate):
+    """Create a new record - Insert a new record into a table"""
+    try:
+        async with get_db_connection() as conn:
+            # Validate table exists
+            table_exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)",
+                schema_name, table_name
+            )
+            if not table_exists:
+                raise HTTPException(status_code=404, detail=f"Table {schema_name}.{table_name} not found")
+            
+            # Build dynamic INSERT query
+            columns = list(record.data.keys())
+            placeholders = [f"${i+1}" for i in range(len(columns))]
+            values = list(record.data.values())
+            
+            query = f"""
+                INSERT INTO {schema_name}.{table_name} ({', '.join(columns)})
+                VALUES ({', '.join(placeholders)})
+                RETURNING *
+            """
+            
+            # Execute insert
+            row = await conn.fetchrow(query, *values)
+            
+            if not row:
+                raise HTTPException(status_code=500, detail="Failed to create record")
+            
+            record_data = dict(row)
+            return RecordResponse(
+                id=record_data.get('id'),
+                data=record_data,
+                created_at=record_data.get('created_at'),
+                updated_at=record_data.get('updated_at')
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create record in {schema_name}.{table_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create record: {str(e)}")
+
+@crud_router.put("/{schema_name}/{table_name}/{record_id}")
+async def update_record(schema_name: str, table_name: str, record_id: str, record: RecordUpdate):
+    """Update an existing record - Modify a record in a table"""
+    try:
+        async with get_db_connection() as conn:
+            # Validate table exists
+            table_exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)",
+                schema_name, table_name
+            )
+            if not table_exists:
+                raise HTTPException(status_code=404, detail=f"Table {schema_name}.{table_name} not found")
+            
+            # Try to convert record_id to integer if possible, otherwise use as string
+            try:
+                record_id_int = int(record_id)
+                exists_query = f"SELECT EXISTS(SELECT 1 FROM {schema_name}.{table_name} WHERE id = $1)"
+                exists = await conn.fetchval(exists_query, record_id_int)
+            except ValueError:
+                # If not an integer, use as string
+                exists_query = f"SELECT EXISTS(SELECT 1 FROM {schema_name}.{table_name} WHERE id = $1)"
+                exists = await conn.fetchval(exists_query, record_id)
+            
+            if not exists:
+                raise HTTPException(status_code=404, detail=f"Record with ID {record_id} not found")
+            
+            # Build dynamic UPDATE query
+            columns = list(record.data.keys())
+            set_clause = ", ".join([f"{col} = ${i+2}" for i, col in enumerate(columns)])
+            values = list(record.data.values())
+            
+            # Use appropriate record_id type
+            if isinstance(record_id_int, int):
+                query = f"""
+                    UPDATE {schema_name}.{table_name}
+                    SET {set_clause}
+                    WHERE id = $1
+                    RETURNING *
+                """
+                row = await conn.fetchrow(query, record_id_int, *values)
+            else:
+                query = f"""
+                    UPDATE {schema_name}.{table_name}
+                    SET {set_clause}
+                    WHERE id = $1
+                    RETURNING *
+                """
+                row = await conn.fetchrow(query, record_id, *values)
+            
+            if not row:
+                raise HTTPException(status_code=500, detail="Failed to update record")
+            
+            record_data = dict(row)
+            return RecordResponse(
+                id=record_data.get('id'),
+                data=record_data,
+                created_at=record_data.get('created_at'),
+                updated_at=record_data.get('updated_at')
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update record {record_id} in {schema_name}.{table_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update record: {str(e)}")
+
+@crud_router.delete("/{schema_name}/{table_name}/{record_id}")
+async def delete_record(schema_name: str, table_name: str, record_id: str):
+    """Delete a record - Remove a record from a table"""
+    try:
+        async with get_db_connection() as conn:
+            # Validate table exists
+            table_exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)",
+                schema_name, table_name
+            )
+            if not table_exists:
+                raise HTTPException(status_code=404, detail=f"Table {schema_name}.{table_name} not found")
+            
+            # Try to convert record_id to integer if possible, otherwise use as string
+            try:
+                record_id_int = int(record_id)
+                exists_query = f"SELECT EXISTS(SELECT 1 FROM {schema_name}.{table_name} WHERE id = $1)"
+                exists = await conn.fetchval(exists_query, record_id_int)
+            except ValueError:
+                # If not an integer, use as string
+                exists_query = f"SELECT EXISTS(SELECT 1 FROM {schema_name}.{table_name} WHERE id = $1)"
+                exists = await conn.fetchval(exists_query, record_id)
+            
+            if not exists:
+                raise HTTPException(status_code=404, detail=f"Record with ID {record_id} not found")
+            
+            # Delete record with appropriate type
+            if isinstance(record_id_int, int):
+                query = f"DELETE FROM {schema_name}.{table_name} WHERE id = $1 RETURNING *"
+                row = await conn.fetchrow(query, record_id_int)
+            else:
+                query = f"DELETE FROM {schema_name}.{table_name} WHERE id = $1 RETURNING *"
+                row = await conn.fetchrow(query, record_id)
+            
+            if not row:
+                raise HTTPException(status_code=500, detail="Failed to delete record")
+            
+            record_data = dict(row)
+            return {
+                "message": "Record deleted successfully",
+                "deleted_record": RecordResponse(
+                    id=record_data.get('id'),
+                    data=record_data,
+                    created_at=record_data.get('created_at'),
+                    updated_at=record_data.get('updated_at')
+                )
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete record {record_id} from {schema_name}.{table_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete record: {str(e)}")
+
+# Include the routers
+app.include_router(admin_router)
+app.include_router(crud_router) 

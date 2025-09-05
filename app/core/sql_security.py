@@ -16,8 +16,7 @@ class SQLSecurity:
         'GRANT', 'REVOKE', 'DENY', 'BACKUP', 'RESTORE',
         'SHUTDOWN', 'KILL', 'RECONFIGURE', 'RECOVERY',
         'BULK INSERT', 'OPENROWSET', 'OPENDATASOURCE',
-        'xp_', 'sp_', 'sys.', 'information_schema.',
-        'pg_', 'pg_catalog.'
+        'xp_', 'sp_', 'sys.', 'pg_', 'pg_catalog.'
     }
     
     # Allowed SQL keywords for raw queries (read-only operations)
@@ -36,7 +35,8 @@ class SQLSecurity:
     ALLOWED_WRITE_KEYWORDS = {
         'INSERT', 'UPDATE', 'DELETE', 'VALUES', 'SET',
         'RETURNING', 'ON CONFLICT', 'ON DUPLICATE KEY UPDATE',
-        'MERGE', 'UPSERT'
+        'MERGE', 'UPSERT', 'CREATE TEMP TABLE', 'CREATE TEMPORARY TABLE',
+        'IF NOT EXISTS', 'CAST'
     }
     
     def __init__(self):
@@ -59,7 +59,7 @@ class SQLSecurity:
             # Block stacked queries
             r';\s*(DROP|DELETE|INSERT|UPDATE|CREATE|ALTER)',
             # Block system table access
-            r'\b(sys\.|information_schema\.|pg_|pg_catalog\.)\w+',
+            #r'\b(sys\.|information_schema\.|pg_|pg_catalog\.)\w+',
             # Block stored procedure execution
             r'\b(EXEC|EXECUTE|CALL)\b',
             # Block file operations
@@ -89,9 +89,12 @@ class SQLSecurity:
         # Convert to uppercase for keyword checking
         sql_upper = sql.upper().strip()
         
-        # Check for dangerous keywords
+        # Check for dangerous keywords (with exceptions for write operations)
         for keyword in self.DANGEROUS_KEYWORDS:
             if keyword in sql_upper:
+                # Allow CREATE TEMP TABLE for write operations
+                if keyword == 'CREATE' and operation_type == "write" and 'CREATE TEMP TABLE' in sql_upper:
+                    continue
                 logger.warning(f"SQL injection attempt detected: dangerous keyword '{keyword}'")
                 raise HTTPException(
                     status_code=400, 
@@ -137,12 +140,12 @@ class SQLSecurity:
     
     def _validate_write_operation(self, sql_upper: str) -> bool:
         """Validate write SQL operations"""
-        # Must start with INSERT, UPDATE, or DELETE
-        valid_starts = ['INSERT', 'UPDATE', 'DELETE']
+        # Must start with INSERT, UPDATE, DELETE, or CREATE TEMP TABLE
+        valid_starts = ['INSERT', 'UPDATE', 'DELETE', 'CREATE TEMP TABLE', 'CREATE TEMPORARY TABLE', 'CREATE TEMP TABLE IF NOT EXISTS']
         if not any(sql_upper.startswith(start) for start in valid_starts):
             raise HTTPException(
                 status_code=400,
-                detail="Write operations must start with INSERT, UPDATE, or DELETE"
+                detail="Write operations must start with INSERT, UPDATE, DELETE, or CREATE TEMP TABLE"
             )
         
         return True

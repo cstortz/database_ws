@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException
 import logging
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, model_validator
+from datetime import datetime
 
 from app.core.database import db_manager
 from app.core.sql_security import sql_security
@@ -43,8 +44,8 @@ class RecordResponse(BaseModel):
     """Model for record response"""
     id: Optional[Any] = None
     data: Dict[str, Any]
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     
     class Config:
         json_schema_extra = {
@@ -220,7 +221,9 @@ class CrudRouter:
                     
                     records = []
                     for row in rows:
-                        record_data = dict(row)
+                        # The database manager now returns a dict with converted datetime strings
+                        record_data = row
+                        
                         records.append(RecordResponse(
                             id=record_data.get('id'),  # Assuming 'id' is the primary key
                             data=record_data,
@@ -299,7 +302,9 @@ class CrudRouter:
                     if not row:
                         raise HTTPException(status_code=404, detail=f"Record with ID {record_id} not found")
                     
-                    record_data = dict(row)
+                    # The database manager now returns a dict with converted datetime strings
+                    record_data = row
+                    
                     return RecordResponse(
                         id=record_data.get('id'),
                         data=record_data,
@@ -370,7 +375,9 @@ class CrudRouter:
                     if not row:
                         raise HTTPException(status_code=500, detail="Failed to create record")
                     
-                    record_data = dict(row)
+                    # The database manager now returns a dict with converted datetime strings
+                    record_data = row
+                    
                     return RecordResponse(
                         id=record_data.get('id'),
                         data=record_data,
@@ -454,7 +461,9 @@ class CrudRouter:
                     if not row:
                         raise HTTPException(status_code=500, detail="Failed to update record")
                     
-                    record_data = dict(row)
+                    # The database manager now returns a dict with converted datetime strings
+                    record_data = row
+                    
                     return RecordResponse(
                         id=record_data.get('id'),
                         data=record_data,
@@ -526,7 +535,9 @@ class CrudRouter:
                     if not row:
                         raise HTTPException(status_code=500, detail="Failed to delete record")
                     
-                    record_data = dict(row)
+                    # The database manager now returns a dict with converted datetime strings
+                    record_data = row
+                    
                     return {
                         "message": "Record deleted successfully",
                         "deleted_record": RecordResponse(
@@ -618,7 +629,9 @@ class CrudRouter:
                     if not row:
                         raise HTTPException(status_code=500, detail=f"Failed to {operation} record")
                     
-                    record_data = dict(row)
+                    # The database manager now returns a dict with converted datetime strings
+                    record_data = row
+                    
                     return {
                         "message": f"Record {operation} successfully",
                         "operation": operation,

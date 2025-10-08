@@ -3,6 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any, List, Tuple, Union
 from dataclasses import dataclass
+from datetime import datetime
 
 from app.core.config import settings
 
@@ -10,6 +11,19 @@ logger = logging.getLogger(__name__)
 
 # Global connection pool
 _pool: Optional[asyncpg.Pool] = None
+
+def convert_datetime_to_string(obj: Any) -> Any:
+    """Convert datetime objects to ISO format strings recursively"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {key: convert_datetime_to_string(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_datetime_to_string(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_datetime_to_string(item) for item in obj)
+    else:
+        return obj
 
 @dataclass
 class PreparedStatement:
@@ -171,10 +185,16 @@ class DatabaseManager:
                     self.prepared_statements[stmt.name] = stmt
                 
                 stmt_obj = connection.get_prepared_statement(stmt.name)
-                return await stmt_obj.fetch(*stmt.parameters)
+                result = await stmt_obj.fetch(*stmt.parameters)
             else:
                 # Execute directly with parameters
-                return await connection.fetch(stmt.sql, *stmt.parameters)
+                result = await connection.fetch(stmt.sql, *stmt.parameters)
+            
+            # Convert asyncpg Records to dicts and then convert datetime objects to strings
+            if result:
+                result_list = [dict(row) for row in result]
+                return convert_datetime_to_string(result_list)
+            return result
         except Exception as e:
             logger.error(f"Failed to execute prepared statement: {e}")
             raise
@@ -207,10 +227,16 @@ class DatabaseManager:
                     self.prepared_statements[stmt.name] = stmt
                 
                 stmt_obj = connection.get_prepared_statement(stmt.name)
-                return await stmt_obj.fetchrow(*stmt.parameters)
+                result = await stmt_obj.fetchrow(*stmt.parameters)
             else:
                 # Execute directly with parameters
-                return await connection.fetchrow(stmt.sql, *stmt.parameters)
+                result = await connection.fetchrow(stmt.sql, *stmt.parameters)
+            
+            # Convert asyncpg Record to dict and then convert datetime objects to strings
+            if result:
+                result_dict = dict(result)
+                return convert_datetime_to_string(result_dict)
+            return result
         except Exception as e:
             logger.error(f"Failed to execute prepared statement: {e}")
             raise

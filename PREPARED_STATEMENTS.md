@@ -63,8 +63,6 @@ stmt = db_manager.prepare_select_query(
 stmt.parameters = (18, "active")
 ```
 
-**Important Security Feature**: The prepared router includes a `convert_parameters_to_tuple()` function that ensures parameters are sorted numerically before binding. This prevents SQL injection vulnerabilities that could occur if parameters are provided in non-sequential order. Parameters with keys "1", "2", "3" are always bound to `$1`, `$2`, `$3` in the correct order, regardless of dictionary insertion order.
-
 ### 3. Execution Methods
 
 The `DatabaseManager` provides three execution methods:
@@ -147,24 +145,6 @@ query = f"SELECT * FROM users WHERE name = '{user_input}'"
 stmt = db_manager.prepare_select_query("public", "users", where_clause="name = $1")
 stmt.parameters = (user_input,)
 ```
-
-### Parameter Ordering Security
-
-The prepared router includes robust parameter ordering to prevent injection attacks:
-
-- **Automatic Parameter Sorting**: Parameters are automatically sorted by numeric key before binding
-- **Order-Independent Safety**: Parameters can be provided in any order (e.g., `{"2": "value", "1": "value"}`) and will be correctly bound to `$1`, `$2`, etc.
-- **Type Safety**: Non-numeric parameter keys are handled safely, preventing unexpected behavior
-
-```python
-# Safe: Parameters can be provided in any order
-parameters = {"2": "active", "1": 18}  # Will correctly bind to $1=18, $2="active"
-stmt = PreparedStatement(sql, convert_parameters_to_tuple(parameters))
-```
-
-### RETURNING Clause Handling
-
-Write operations (INSERT, UPDATE, DELETE) with `RETURNING` clauses are automatically detected and use the appropriate execution method (`execute_prepared_row()`) to properly handle returned data, ensuring consistent parameterized execution across all operation types.
 
 ### Input Validation
 

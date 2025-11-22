@@ -734,8 +734,10 @@ Validate SQL statements without execution.
 ### SQL Injection Protection
 - All database operations use prepared statements
 - Parameter binding prevents SQL injection
+- **Parameter Ordering Security**: Parameters are automatically sorted numerically to ensure correct binding order, preventing injection vulnerabilities from parameter ordering issues
 - SQL security validation blocks dangerous keywords
 - Input sanitization for schema and table names
+- **RETURNING Clause Handling**: Write operations with RETURNING clauses use proper parameterized execution methods
 
 ### Operation Type Validation
 - Read operations only allow SELECT statements

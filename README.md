@@ -545,6 +545,8 @@ The API documentation includes:
 
 - **Prepared Statements**: All database operations use prepared statements to prevent SQL injection
 - **Parameter Binding**: All user inputs are properly parameterized using PostgreSQL placeholders
+- **Parameter Ordering Security**: Parameters are automatically sorted numerically to ensure correct binding order, preventing injection vulnerabilities from parameter misordering
+- **RETURNING Clause Handling**: Write operations automatically detect RETURNING clauses and use appropriate parameterized execution methods
 - **SQL Security Validation**: Additional validation layer for dangerous SQL keywords and patterns
 - **Input Sanitization**: Schema and table names are validated and sanitized
 - **Operation Type Validation**: Read/write operations are strictly separated and validated

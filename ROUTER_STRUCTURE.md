@@ -254,8 +254,10 @@ curl -X DELETE "http://localhost:8000/crud/prepared/statements"
 ### SQL Injection Protection
 - All endpoints use prepared statements
 - Parameter binding prevents SQL injection
+- **Parameter Ordering Security**: Parameters are automatically sorted numerically before binding to ensure correct order, preventing injection vulnerabilities even when parameters are provided in non-sequential order
 - `sql_security` module provides additional validation
 - Input sanitization for schema and table names
+- **RETURNING Clause Handling**: Write operations automatically detect RETURNING clauses and use appropriate parameterized execution methods
 
 ### Operation Type Validation
 - Read operations only allow SELECT statements

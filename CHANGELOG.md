@@ -1,5 +1,54 @@
 # Changelog - Database Service
 
+## Version 2.2.0 - Security Enhancements: Parameter Ordering & SQL Injection Fixes
+
+### Overview
+This update addresses critical SQL injection vulnerabilities in the prepared router by implementing proper parameter ordering and consistent execution methods for all database operations.
+
+### Security Fixes
+
+#### Parameter Ordering Vulnerability (Critical)
+- **Issue**: Parameters dictionary was converted to tuple using `.values()` without ensuring numeric order, potentially causing parameters to be bound incorrectly if provided in non-sequential order
+- **Fix**: Implemented `convert_parameters_to_tuple()` function that sorts parameter keys numerically before binding
+- **Impact**: Prevents SQL injection vulnerabilities that could occur from parameter misordering
+- **Location**: `app/routers/prepared_router.py`
+
+#### Execution Method Consistency
+- **Issue**: Write operations (INSERT, UPDATE, DELETE) with RETURNING clauses were using `conn.execute()` directly instead of proper prepared statement methods
+- **Fix**: Added automatic detection of RETURNING clauses and use of `execute_prepared_row()` for queries that return data
+- **Impact**: Ensures consistent parameterized execution across all operation types
+- **Location**: All write operation endpoints in `app/routers/prepared_router.py`
+
+### Technical Details
+
+#### New Function: `convert_parameters_to_tuple()`
+```python
+def convert_parameters_to_tuple(parameters: Optional[Dict[str, Any]]) -> tuple:
+    """
+    Convert parameters dictionary to tuple in correct numeric order.
+    
+    This ensures that parameters with keys "1", "2", "3" are bound to
+    $1, $2, $3 in the correct order, preventing SQL injection from
+    parameter ordering issues.
+    """
+```
+
+#### Enhanced Write Operation Handling
+- Automatic detection of RETURNING clauses using regex pattern matching
+- Proper use of `db_manager.execute_prepared_row()` for queries returning data
+- Consistent error handling and response formatting
+
+### Documentation Updates
+- Updated `PREPARED_STATEMENTS.md` with parameter ordering security details
+- Enhanced `API_DOCUMENTATION.md` security section with new protections
+- Updated `ROUTER_STRUCTURE.md` with security feature documentation
+- Added detailed changelog entry documenting all fixes
+
+### Testing Recommendations
+- Test parameter binding with non-sequential parameter keys (e.g., `{"2": "value", "1": "value"}`)
+- Verify RETURNING clause handling for INSERT, UPDATE, DELETE operations
+- Confirm all parameters are bound in correct numeric order
+
 ## Version 2.1.0 - Complete Endpoint Testing & Documentation Update
 
 ### Overview

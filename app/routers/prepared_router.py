@@ -2,11 +2,27 @@ from fastapi import APIRouter, HTTPException
 import logging
 from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel
+import re
 
 from app.core.database import db_manager, PreparedStatement
 from app.core.sql_security import sql_security
 
 logger = logging.getLogger(__name__)
+
+def convert_parameters_to_tuple(parameters: Optional[Dict[str, Any]]) -> tuple:
+    """
+    Convert parameters dictionary to tuple in correct numeric order.
+    
+    This ensures that parameters with keys "1", "2", "3" are bound to
+    $1, $2, $3 in the correct order, preventing SQL injection from
+    parameter ordering issues.
+    """
+    if not parameters:
+        return ()
+    
+    # Sort parameter keys numerically to ensure correct order
+    sorted_keys = sorted(parameters.keys(), key=lambda x: int(x) if x.isdigit() else float('inf'))
+    return tuple(parameters[key] for key in sorted_keys)
 
 # Pydantic models for prepared SQL operations
 class PreparedSQLRequest(BaseModel):
@@ -234,8 +250,8 @@ class PreparedRouter:
                 logger.info(f"Executing prepared SQL: {request.sql}")
 
                 async with db_manager.get_connection() as conn:
-                    # Convert parameters to tuple if provided
-                    parameters = tuple(request.parameters.values()) if request.parameters else ()
+                    # Convert parameters to tuple in correct numeric order
+                    parameters = convert_parameters_to_tuple(request.parameters)
                     
                     # Create prepared statement
                     stmt = PreparedStatement(request.sql, parameters)
@@ -254,29 +270,48 @@ class PreparedRouter:
                             parameters=request.parameters
                         )
                     else:
-                        # Execute write operation
-                        result = await conn.execute(stmt.sql, *stmt.parameters)
+                        # Execute write operation using proper parameterized query
+                        # Check if query has RETURNING clause to determine if we should fetch rows
+                        has_returning = bool(re.search(r'\bRETURNING\b', request.sql, re.IGNORECASE))
+                        if has_returning:
+                            # Use execute_prepared_row for queries that return data
+                            row = await db_manager.execute_prepared_row(stmt, conn)
+                            data = [row] if row else []
+                            affected_rows = 1 if row else 0
+                            
+                            return PreparedSQLResponse(
+                                success=True,
+                                message=f"Prepared SQL write query executed successfully. Affected rows: {affected_rows}",
+                                data=data,
+                                row_count=len(data),
+                                affected_rows=affected_rows,
+                                sql=request.sql,
+                                parameters=request.parameters
+                            )
+                        else:
+                            # Use execute for queries that don't return data
+                            result = await conn.execute(stmt.sql, *stmt.parameters)
                         
-                        # Parse the result to extract the number of affected rows
-                        affected_rows = 0
-                        if result:
-                            try:
-                                # Result format is like "UPDATE 1" or "INSERT 0 1"
-                                parts = result.split()
-                                if len(parts) >= 2:
-                                    affected_rows = int(parts[-1])  # Last part is usually the count
-                                else:
-                                    affected_rows = int(result)
-                            except (ValueError, IndexError):
-                                affected_rows = 0
-                        
-                        return PreparedSQLResponse(
-                            success=True,
-                            message=f"Prepared SQL write query executed successfully. Affected rows: {affected_rows}",
-                            affected_rows=affected_rows,
-                            sql=request.sql,
-                            parameters=request.parameters
-                        )
+                            # Parse the result to extract the number of affected rows
+                            affected_rows = 0
+                            if result:
+                                try:
+                                    # Result format is like "UPDATE 1" or "INSERT 0 1"
+                                    parts = result.split()
+                                    if len(parts) >= 2:
+                                        affected_rows = int(parts[-1])  # Last part is usually the count
+                                    else:
+                                        affected_rows = int(result)
+                                except (ValueError, IndexError):
+                                    affected_rows = 0
+                            
+                            return PreparedSQLResponse(
+                                success=True,
+                                message=f"Prepared SQL write query executed successfully. Affected rows: {affected_rows}",
+                                affected_rows=affected_rows,
+                                sql=request.sql,
+                                parameters=request.parameters
+                            )
             except HTTPException:
                 raise
             except Exception as e:
@@ -322,8 +357,8 @@ class PreparedRouter:
                 logger.info(f"Executing prepared SELECT: {request.sql}")
 
                 async with db_manager.get_connection() as conn:
-                    # Convert parameters to tuple if provided
-                    parameters = tuple(request.parameters.values()) if request.parameters else ()
+                    # Convert parameters to tuple in correct numeric order
+                    parameters = convert_parameters_to_tuple(request.parameters)
                     
                     # Create prepared statement
                     stmt = PreparedStatement(request.sql, parameters)
@@ -385,13 +420,31 @@ class PreparedRouter:
                 logger.info(f"Executing prepared INSERT: {request.sql}")
 
                 async with db_manager.get_connection() as conn:
-                    # Convert parameters to tuple if provided
-                    parameters = tuple(request.parameters.values()) if request.parameters else ()
+                    # Convert parameters to tuple in correct numeric order
+                    parameters = convert_parameters_to_tuple(request.parameters)
                     
                     # Create prepared statement
                     stmt = PreparedStatement(request.sql, parameters)
                     
-                    # Execute insert operation
+                    # Check if query has RETURNING clause
+                    has_returning = bool(re.search(r'\bRETURNING\b', request.sql, re.IGNORECASE))
+                    if has_returning:
+                        # Use execute_prepared_row for queries that return data
+                        row = await db_manager.execute_prepared_row(stmt, conn)
+                        data = [row] if row else []
+                        affected_rows = 1 if row else 0
+                        
+                        return PreparedSQLResponse(
+                            success=True,
+                            message=f"Prepared INSERT query executed successfully. Affected rows: {affected_rows}",
+                            data=data,
+                            row_count=len(data),
+                            affected_rows=affected_rows,
+                            sql=request.sql,
+                            parameters=request.parameters
+                        )
+                    
+                    # Execute insert operation without RETURNING
                     result = await conn.execute(stmt.sql, *stmt.parameters)
                     
                     # Parse the result to extract the number of affected rows
@@ -458,13 +511,31 @@ class PreparedRouter:
                 logger.info(f"Executing prepared UPDATE: {request.sql}")
 
                 async with db_manager.get_connection() as conn:
-                    # Convert parameters to tuple if provided
-                    parameters = tuple(request.parameters.values()) if request.parameters else ()
+                    # Convert parameters to tuple in correct numeric order
+                    parameters = convert_parameters_to_tuple(request.parameters)
                     
                     # Create prepared statement
                     stmt = PreparedStatement(request.sql, parameters)
                     
-                    # Execute update operation
+                    # Check if query has RETURNING clause
+                    has_returning = bool(re.search(r'\bRETURNING\b', request.sql, re.IGNORECASE))
+                    if has_returning:
+                        # Use execute_prepared_row for queries that return data
+                        row = await db_manager.execute_prepared_row(stmt, conn)
+                        data = [row] if row else []
+                        affected_rows = 1 if row else 0
+                        
+                        return PreparedSQLResponse(
+                            success=True,
+                            message=f"Prepared UPDATE query executed successfully. Affected rows: {affected_rows}",
+                            data=data,
+                            row_count=len(data),
+                            affected_rows=affected_rows,
+                            sql=request.sql,
+                            parameters=request.parameters
+                        )
+                    
+                    # Execute update operation without RETURNING
                     result = await conn.execute(stmt.sql, *stmt.parameters)
                     
                     # Parse the result to extract the number of affected rows
@@ -530,13 +601,31 @@ class PreparedRouter:
                 logger.info(f"Executing prepared DELETE: {request.sql}")
 
                 async with db_manager.get_connection() as conn:
-                    # Convert parameters to tuple if provided
-                    parameters = tuple(request.parameters.values()) if request.parameters else ()
+                    # Convert parameters to tuple in correct numeric order
+                    parameters = convert_parameters_to_tuple(request.parameters)
                     
                     # Create prepared statement
                     stmt = PreparedStatement(request.sql, parameters)
                     
-                    # Execute delete operation
+                    # Check if query has RETURNING clause
+                    has_returning = bool(re.search(r'\bRETURNING\b', request.sql, re.IGNORECASE))
+                    if has_returning:
+                        # Use execute_prepared_row for queries that return data
+                        row = await db_manager.execute_prepared_row(stmt, conn)
+                        data = [row] if row else []
+                        affected_rows = 1 if row else 0
+                        
+                        return PreparedSQLResponse(
+                            success=True,
+                            message=f"Prepared DELETE query executed successfully. Affected rows: {affected_rows}",
+                            data=data,
+                            row_count=len(data),
+                            affected_rows=affected_rows,
+                            sql=request.sql,
+                            parameters=request.parameters
+                        )
+                    
+                    # Execute delete operation without RETURNING
                     result = await conn.execute(stmt.sql, *stmt.parameters)
                     
                     # Parse the result to extract the number of affected rows
